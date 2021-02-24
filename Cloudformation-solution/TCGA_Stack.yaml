@@ -1,0 +1,708 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this
+# software and associated documentation files (the "Software"), to deal in the Software
+# without restriction, including without limitation the rights to use, copy, modify,
+# merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+# PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This CloudFormation Template deploys Glue jobs and crawlers for TCGA data and an  RStudio Server instance on AWS with a self-signed SSL certificate.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Required
+        Parameters:
+          - OutputBucket
+          - ExistingBucket
+          - Password
+          - VPCId
+          - VPCSubnet
+      - Label:
+          default: Optional
+        Parameters:
+          - AccessCidr
+          - InstanceType
+          - HomeDirectorySize
+
+    ParameterLabels:
+      OutputBucket:
+        default: S3 Bucket Name
+      ExistingBucket:
+        default: Existing Bucket?
+      VPCId:
+        default: VPC ID
+      VPCSubnet:
+        default: VPC Subnet
+      AccessCidr:
+        default: Access CIDR Range
+      InstanceType:
+        default: Rstudio server Instance type
+      HomeDirectorySize:
+        default: R Home Directory size
+      Password:
+        default: Password for Rstudio server rstudiouser login
+
+Parameters:
+#  VpcId:
+#    Type: AWS::EC2::VPC::Id
+#    Description: VPC this server will reside in
+  VPCSubnet:
+    Description: The subnet in which you want your R-Studio server to be deployed.
+    Type: AWS::EC2::Subnet::Id
+  VPCId:
+    Type: AWS::EC2::VPC::Id
+  HomeDirectorySize:
+    Description: The amount of encrypted disk space, in GBs, allocated to store R-Studio user's local data.
+    Type: Number
+    Default: 20
+  InstanceType:
+    Type: String
+    Description: Instance type for the R-Studio server.
+    AllowedValues:
+      - t2.medium 
+      - t2.large 
+      - t2.xlarge 
+      - t2.2xlarge 
+      - t3.medium 
+      - t3.large 
+      - t3.xlarge 
+      - t3.2xlarge 
+      - m4.large 
+      - m4.xlarge 
+      - m4.2xlarge 
+      - m4.4xlarge 
+      - m4.10xlarge 
+      - m4.16xlarge 
+      - m5.large 
+      - m5.xlarge 
+      - m5.2xlarge 
+      - m5.4xlarge 
+      - m5.12xlarge 
+      - m5.24xlarge 
+      - c4.large 
+      - c4.xlarge 
+      - c4.2xlarge 
+      - c4.4xlarge 
+      - c4.8xlarge 
+      - c5.large 
+      - c5.xlarge 
+      - c5.2xlarge 
+      - c5.4xlarge 
+      - c5.9xlarge 
+      - c5.18xlarge
+      - r4.large 
+      - r4.xlarge 
+      - r4.2xlarge 
+      - r4.4xlarge 
+      - r4.8xlarge 
+      - r4.16xlarge
+      - r5.large 
+      - r5.xlarge 
+      - r5.2xlarge 
+      - r5.4xlarge 
+      - r5.8xlarge 
+      - r5.16xlarge 
+      - g2.2xlarge
+      - g2.8xlarge
+      - p2.xlarge
+      - p2.8xlarge
+      - p2.16xlarge
+      - g3.4xlarge
+      - g3.8xlarge
+      - g3.16xlarge
+    ConstraintDescription: Valid instance type in the t2, t3, m5, c5, r4, g2, p2, and g3 families
+    Default: t2.xlarge
+  Password:
+    Description: Provide a password for the 'rstudiouser' user on Rstudio server. This is the password you will use to login to the Rstudio server with username 'rstudiouser'
+    Type: 'String'
+    NoEcho: true 
+  AccessCidr:
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$
+    Description: 'The CIDR IP range that is permitted to access your Rstudio server. Note: A value of 0.0.0.0/0 will allow access from ANY IP address.'
+    Type: String
+    Default: 0.0.0.0/0
+  OutputBucket:
+    Description: S3 bucket where results will be written. Bucketname needs to be unique. The bucket name must respect the S3 bucket naming conventions (can contain lowercase letters, numbers, periods and hyphens).
+    Type: String
+    AllowedPattern: "((?=^.{3,63}$)(?!^(\\d+\\.)+\\d+$)(^(([a-z0-9]|[a-z0-9][a-z0-9\\-]*[a-z0-9])\\.)*([a-z0-9]|[a-z0-9][a-z0-9\\-]*[a-z0-9])$)|(^.{0}$))"
+  ExistingBucket:
+    Description: Is this an existing bucket?
+    Type: String
+    AllowedValues:
+      - Yes
+      - No
+    Default: No
+Conditions:
+  BucketDoesNotExist:
+    Fn::Equals:
+      - !Ref ExistingBucket
+      - No
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      AMI: ami-04d29b6f966df1537
+    us-east-2:
+      AMI: ami-09558250a3419e7d0
+    us-west-1:
+      AMI: ami-08d9a394ac1c2994c
+    us-west-2:
+      AMI: ami-0e472933a1395e172
+    ca-central-1:
+      AMI: ami-0fca0f98dc87d39df
+    eu-west-1:
+      AMI: ami-0ce1e3f77cd41957e
+    eu-west-2:
+      AMI: ami-08b993f76f42c3e2f
+    eu-west-3:
+      AMI: ami-0e9c91a3fc56a0376
+    eu-central-1:
+      AMI: ami-0bd39c806c2335b95
+    sa-east-1:
+      AMI: ami-0096398577720a4a3
+    ap-south-1:
+      AMI: ami-08f63db601b82ff5f
+    ap-southeast-1:
+      AMI: ami-0d728fd4e52be968f
+    ap-southeast-2:
+      AMI: ami-09f765d333a8ebb4b
+    ap-northeast-1:
+      AMI: ami-00f045aed21a55240
+    ap-northeast-2:
+      AMI: ami-03461b78fdba0ff9d
+    ap-northeast-3:
+      AMI: ami-0777add682c903044
+
+
+Resources:
+
+  TCGAS3Bucket:
+    Type: AWS::S3::Bucket
+    Condition: BucketDoesNotExist
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref OutputBucket
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+             SSEAlgorithm: AES256
+
+  PublicSGSSL:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for RStudio SSL
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: !Ref 'AccessCidr'
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: !Ref 'AccessCidr'
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref 'AccessCidr'
+
+      Tags:
+        - Key: Name
+          Value: RStudio SSL Security Group
+
+#IAM Roles for the RStudio Server
+  RStudioRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      ManagedPolicyArns: 
+        - "arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM"
+        - "arn:aws:iam::aws:policy/AmazonSageMakerFullAccess"
+        - "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole"
+        - "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+        - "arn:aws:iam::aws:policy/AmazonAthenaFullAccess"
+  RStudioRolePolicies:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: root
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: 
+              - "s3:GetObject"
+              - "s3:ListObjects"
+              - "s3:ListBucket"
+              - "s3:PutObject"
+              - "s3:CreateBucket"
+            Resource: '*'
+          - Effect: Allow
+            Action: 
+              - "iam:GetRole"
+              - "s3:ListAllMyBuckets"
+            Resource: '*'
+      Roles:
+        - !Ref 'RStudioRole'
+  RStudioInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref 'RStudioRole'
+
+
+  RStudioInstance:
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          files:
+              /etc/awslogs/awscli.conf:
+                content: !Sub |
+                  [plugins]
+                  cwlogs = cwlogs
+                  [default]
+                  region = ${AWS::Region}
+                mode: 000664
+                owner: root
+                group: root              
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !FindInMap
+        - RegionMap
+        - !Ref 'AWS::Region'
+        - AMI
+      IamInstanceProfile: !Ref RStudioInstanceProfile
+      NetworkInterfaces: 
+        - AssociatePublicIpAddress: "true"
+          DeviceIndex: "0"
+          GroupSet: 
+            - Ref: "PublicSGSSL"
+          SubnetId: 
+            Ref: "VPCSubnet"
+      Tags:
+        - Key: "Name"
+          Value: !Sub "RStudio-${AWS::StackName}"
+      BlockDeviceMappings: 
+          - DeviceName: "/dev/xvda"
+            Ebs: 
+              VolumeType: "gp2"
+              DeleteOnTermination: "true"
+              VolumeSize: 50
+          - DeviceName: "/dev/sdm"
+            Ebs: 
+              VolumeType: "gp2"
+              DeleteOnTermination: "true"
+              Encrypted: "true"
+              VolumeSize: !Ref HomeDirectorySize
+      UserData:
+        Fn::Base64: !Sub | 
+          #!/bin/bash
+          RSTUDIO_URL="https://download2.rstudio.org/rstudio-server-rhel-1.1.463-x86_64.rpm"
+          RSTUDIOPORT=80
+          passwd=${Password}
+          
+          # Install SSM client
+          yum install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm
+          restart amazon-ssm-agent
+          /opt/aws/bin/cfn-init --verbose --stack ${AWS::StackName} --resource RStudioInstance --region ${AWS::Region}
+          yum install -y amazon-linux-extras 
+          amazon-linux-extras enable R4
+          yum install -y R libcurl-devel libxml2-devel openssl-devel libssl-devel libcurl4-openssl-dev
+          # set unix environment variables
+          sudo su << BASH_SCRIPT
+          export JAVA_HOME=/etc/alternatives/jre
+          ' >> /etc/profile
+          BASH_SCRIPT
+          sudo sh -c "source /etc/profile"
+          sudo useradd rstudiouser
+          echo "rstudiouser:$passwd" | sudo chpasswd
+          sudo R CMD javareconf
+
+           sudo R --vanilla -e 'install.packages("rJava",repos="http://cran.us.r-project.org")'
+           sudo R --vanilla -e 'install.packages("RJDBC",repos="http://cran.us.r-project.org")'
+           sudo R --vanilla -e 'install.packages("AWR.Athena",repos="http://cran.us.r-project.org")'
+           sudo R --vanilla -e 'install.packages("dplyr",repos="http://cran.us.r-project.org")'
+           sudo R --vanilla -e 'install.packages("ggplot2",repos="http://cran.us.r-project.org")'
+           sudo R --vanilla -e 'install.packages("BiocManager",repos="http://cran.us.r-project.org")'
+
+          # install rstudio
+          RSTUDIO_FILE=$(basename $RSTUDIO_URL)
+          wget $RSTUDIO_URL
+          sudo yum install --nogpgcheck -y $RSTUDIO_FILE
+          # change port - 8787 will not work for many companies
+          sudo sh -c "echo 'www-port=$RSTUDIOPORT' >> /etc/rstudio/rserver.conf"
+          sudo perl -p -i -e "s/= 5../= 100/g" /etc/pam.d/rstudio
+          sudo rstudio-server stop || true
+          sudo rstudio-server start
+          region=`curl http://169.254.169.254/latest/dynamic/instance-identity/document|grep region|awk -F\" '{print $4}'`
+
+
+  LambdaExecutionRole:
+      Type: 'AWS::IAM::Role'
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                  - lambda.amazonaws.com
+              Action:
+                - 'sts:AssumeRole'
+        ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole        
+        Policies:
+          - PolicyName: LambdaExecutionRole
+            PolicyDocument:
+              Version: 2012-10-17
+              Statement:
+                - Sid: s3fullaccess
+                  Effect: Allow
+                  Action:
+                    - 's3:*'
+                  Resource: '*'  
+
+
+
+  GlueJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "glue.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        -
+          PolicyName: "root"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action: "*"
+                Resource: "*"
+ 
+
+  S3CopyLambda:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Environment:
+        Variables:
+          dest_bucket_name : !Ref OutputBucket
+          dest_prefix	 : aws-tcga-scripts
+          source_bucket_name	: aws-bigdata-blog
+          source_prefix : artifacts/aws-blog-tcga-analysis-using-glue-athena
+      Code: 
+        ZipFile: |
+          import boto3
+          import logging
+          import os
+          import cfnresponse, os
+          s3 = boto3.resource('s3')
+          def lambda_handler(event, context): 
+            logger = logging.getLogger()
+            logger.setLevel(logging.INFO)
+            try:
+                  if event['RequestType'] == 'Delete':
+                      logger.info('Deleted!')
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return       
+                  source_bucket_name = os.environ['source_bucket_name']
+                  source_prefix = os.environ['source_prefix']
+                  dest_bucket_name = os.environ['dest_bucket_name']
+                  dest_prefix = os.environ['dest_prefix']
+                  source_bucket = s3.Bucket(source_bucket_name)
+                  dest_bucket = s3.Bucket(dest_bucket_name)
+                  for obj in source_bucket.objects.filter(Prefix=source_prefix):
+                    source = { 'Bucket': source_bucket_name,
+                                  'Key': obj.key}
+                    dest_key = obj.key.replace(source_prefix, dest_prefix, 1)
+                    dest_obj = dest_bucket.Object(dest_key)
+                    dest_obj.copy(source)
+                    logger.info('Copy Complete!')
+                    cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+            except Exception:
+                  logger.exception('Signaling failure to CloudFormation.')
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {})
+              
+      Handler: 'index.lambda_handler'
+      MemorySize: 128
+      Runtime: 'python3.7'
+      Timeout: 600
+      FunctionName: S3CopyLambda
+      Role: !GetAtt 
+        - LambdaExecutionRole
+        - Arn
+  
+
+  Primerinvoke:
+    Type: AWS::CloudFormation::CustomResource
+    Version: "1.0"
+    Properties:
+      ServiceToken: !GetAtt S3CopyLambda.Arn
+
+
+  TCGAexpressionglueJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Command: 
+        Name: glueetl
+        ScriptLocation: !Sub "s3://${OutputBucket}/aws-tcga-scripts/Pysparksamples/expression_job.py"
+      DefaultArguments:
+        "--output_bucket": !Ref 'OutputBucket'
+        "--project": "TCGA-BRCA"
+        "--workflow_type": "HTSeq - FPKM-UQ"
+      GlueVersion: 2.0
+      ExecutionProperty:
+        MaxConcurrentRuns: 2
+      MaxRetries: 0
+      Name: tcga-expression
+      Role: !Ref GlueJobRole
+  
+  TCGAmutationgluejob:
+    Type: AWS::Glue::Job
+    Properties:
+      Command:
+        Name: glueetl
+        ScriptLocation: !Sub "s3://${OutputBucket}/aws-tcga-scripts/Pysparksamples/mutation_job.py"
+      DefaultArguments:
+        "--output_bucket": !Ref 'OutputBucket'
+        "--project": "TCGA-BRCA"
+      GlueVersion: 2.0
+      ExecutionProperty:
+        MaxConcurrentRuns: 2
+      MaxRetries: 0
+      Name: tcga-mutation
+      Role: !Ref GlueJobRole
+   
+  TCGAcnvglueJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Command: 
+        Name: glueetl
+        ScriptLocation: !Sub "s3://${OutputBucket}/aws-tcga-scripts/Pysparksamples/copy_number_job.py"
+      DefaultArguments:
+        "--output_bucket": !Ref 'OutputBucket'
+        "--project": "TCGA-BRCA"
+      GlueVersion: 2.0
+      ExecutionProperty:
+        MaxConcurrentRuns: 2
+      MaxRetries: 0
+      Name: tcga-cnv
+      Role: !Ref GlueJobRole
+
+  TCGAclinicalglueJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Command: 
+        Name: glueetl
+        ScriptLocation: !Sub "s3://${OutputBucket}/aws-tcga-scripts/Pysparksamples/clinical_job.py"
+      DefaultArguments:
+        "--output_bucket": !Ref 'OutputBucket'
+        "--project": "TCGA-BRCA"
+      GlueVersion: 2.0
+      ExecutionProperty:
+        MaxConcurrentRuns: 2
+      MaxRetries: 0
+      Name: tcga-clinical
+      Role: !Ref GlueJobRole
+
+  MyDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: "tcgatables"
+        Description: "AWS Glue container to hold tables for the TCGA crawlers"
+
+  TCGAMutationCrawler:
+    Type: AWS::Glue::Crawler
+    Properties: 
+      Name: "TCGAmut"
+      Role: !Ref GlueJobRole
+      Description: AWS Glue crawler to crawl TCGA brca mutation data
+      DatabaseName: "tcgatables"
+      Targets:
+        S3Targets:
+          - Path: !Join ['',['s3://',!Ref 'OutputBucket','/tcga-mutation']]
+      SchemaChangePolicy:
+        UpdateBehavior: "UPDATE_IN_DATABASE"
+        DeleteBehavior: "LOG"
+      Configuration: "{\"Version\":1.0,\"CrawlerOutput\":{\"Partitions\":{\"AddOrUpdateBehavior\":\"InheritFromTable\"},\"Tables\":{\"AddOrUpdateBehavior\":\"MergeNewColumns\"}}}"
+
+  TCGACNVCrawler:
+    Type: AWS::Glue::Crawler
+    Properties: 
+      Name: "TCGAcnv"
+      Role: !Ref GlueJobRole
+      Description: AWS Glue crawler to crawl TCGA brca copy number data
+      DatabaseName: "tcgatables"
+      Targets:
+        S3Targets:
+          - Path: !Join ['',['s3://',!Ref 'OutputBucket','/tcga-cnv']]
+      SchemaChangePolicy:
+        UpdateBehavior: "UPDATE_IN_DATABASE"
+        DeleteBehavior: "LOG"
+      Configuration: "{\"Version\":1.0,\"CrawlerOutput\":{\"Partitions\":{\"AddOrUpdateBehavior\":\"InheritFromTable\"},\"Tables\":{\"AddOrUpdateBehavior\":\"MergeNewColumns\"}}}"
+
+  TCGAExpressionCrawler:
+    Type: AWS::Glue::Crawler
+    Properties: 
+      Name: "TCGAexp"
+      Role: !Ref GlueJobRole
+      Description: AWS Glue crawler to crawl TCGA expression data
+      DatabaseName: "tcgatables"
+      Targets:
+        S3Targets:
+          - Path: !Join ['',['s3://',!Ref 'OutputBucket','/tcga-expression']]
+      SchemaChangePolicy:
+        UpdateBehavior: "UPDATE_IN_DATABASE"
+        DeleteBehavior: "LOG"
+      Configuration: "{\"Version\":1.0,\"CrawlerOutput\":{\"Partitions\":{\"AddOrUpdateBehavior\":\"InheritFromTable\"},\"Tables\":{\"AddOrUpdateBehavior\":\"MergeNewColumns\"}}}"
+
+  TCGAClinicalCrawler:
+    Type: AWS::Glue::Crawler
+    Properties: 
+      Name: "TCGAClinical"
+      Role: !Ref GlueJobRole
+      Description: AWS Glue crawler to crawl TCGA clinical data
+      DatabaseName: "tcgatables"
+      Targets:
+        S3Targets:
+          - Path: !Join ['',['s3://',!Ref 'OutputBucket','/tcga-clinical']]
+      SchemaChangePolicy:
+        UpdateBehavior: "UPDATE_IN_DATABASE"
+        DeleteBehavior: "LOG"
+      Configuration: "{\"Version\":1.0,\"CrawlerOutput\":{\"Partitions\":{\"AddOrUpdateBehavior\":\"InheritFromTable\"},\"Tables\":{\"AddOrUpdateBehavior\":\"MergeNewColumns\"}}}"
+
+
+  TCGAWorkflow:
+    Type: AWS::Glue::Workflow
+    Properties:
+      Name: "TCGAWorkflow"
+      Description: "Workflow that kicks off exp job and crawler"
+
+  WorkflowStartTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: WorkflowStartTrigger
+      Type: ON_DEMAND
+      Description: Trigger for starting the workflow
+      Actions:
+        - JobName: !Ref 'TCGAexpressionglueJob'
+          Arguments:
+            {
+              "--project": "TCGA-BRCA",
+              "--workflow_type": "HTSeq - FPKM-UQ"
+            }           
+        - JobName: !Ref 'TCGAmutationgluejob'
+          Arguments:
+            {
+              "--project": "TCGA-BRCA"
+            }           
+        - JobName: !Ref 'TCGAcnvglueJob'
+          Arguments:
+            {
+              "--project": "TCGA-BRCA"
+            }           
+        - JobName: !Ref 'TCGAclinicalglueJob'
+          Arguments:
+            {
+              "--project": "TCGA-BRCA"
+            }           
+      WorkflowName: !Ref TCGAWorkflow
+
+  ExpCrawlerTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: "ExpCrawlerTrigger"
+      Type: "CONDITIONAL"
+      Description: "Description for a conditional job trigger"
+      Actions:
+        - CrawlerName: !Ref 'TCGAExpressionCrawler' 
+      StartOnCreation: true
+      Predicate:
+        Conditions:
+          - LogicalOperator: EQUALS
+            JobName: !Ref 'TCGAexpressionglueJob'
+            State: SUCCEEDED
+      WorkflowName: !Ref TCGAWorkflow
+
+  MutCrawlerTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: "MutationCrawlerTrigger"
+      Type: "CONDITIONAL"
+      Description: "Description for a conditional Mutation crawler job trigger"
+      Actions:
+        - CrawlerName: !Ref 'TCGAMutationCrawler' 
+      StartOnCreation: true
+      Predicate:
+        Conditions:
+          - LogicalOperator: EQUALS
+            JobName: !Ref 'TCGAmutationgluejob'
+            State: SUCCEEDED
+      WorkflowName: !Ref TCGAWorkflow
+
+  CnvCrawlerTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: "CnvCrawlerTrigger"
+      Type: "CONDITIONAL"
+      Description: "Description for a conditional CNV crawler job trigger"
+      Actions:
+        - CrawlerName: !Ref 'TCGACNVCrawler' 
+      StartOnCreation: true
+      Predicate:
+        Conditions:
+          - LogicalOperator: EQUALS
+            JobName: !Ref 'TCGAcnvglueJob'
+            State: SUCCEEDED
+      WorkflowName: !Ref TCGAWorkflow
+
+  ClinCrawlerTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: "ClinicalCrawlerTrigger"
+      Type: "CONDITIONAL"
+      Description: "Description for a conditional Clinical crawler job trigger"
+      Actions:
+        - CrawlerName: !Ref 'TCGAClinicalCrawler' 
+      StartOnCreation: true
+      Predicate:
+        Conditions:
+          - LogicalOperator: EQUALS
+            JobName: !Ref 'TCGAclinicalglueJob'
+            State: SUCCEEDED
+      WorkflowName: !Ref TCGAWorkflow
+
+Outputs:
+  RStudioURL:
+    Value: !Join ['', ['http://', !GetAtt 'RStudioInstance.PublicDnsName', ':80']]
